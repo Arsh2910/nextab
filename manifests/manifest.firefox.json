@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "NexTab",
+  "version": "1.0.0",
+  "description": "Customizable, privacy-focused new tab with animated ASCII art.",
+  "permissions": [
+    "bookmarks"
+  ],
+  "host_permissions": [
+    "https://duckduckgo.com/*"
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "nextab@extension.local",
+      "strict_min_version": "109.0"
+    }
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; img-src 'self' https: data: blob:;"
+  },
+  "chrome_url_overrides": {
+    "newtab": "index.html"
+  }
+}
