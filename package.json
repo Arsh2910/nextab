@@ -11,7 +11,8 @@
     "build:firefox": "vite build --mode firefox",
     "build:safari": "vite build --mode safari",
     "build": "npm run build:chrome && npm run build:firefox && npm run build:safari",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types tests/*.test.ts"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

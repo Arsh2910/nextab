@@ -5,6 +5,7 @@
 import { findMatchingWebsites, parseExplicitUrl, inferWebsiteSuggestion, type WebService } from "./websites";
 import { getBookmarksTree } from "./src/adapters/bookmarks";
 import { loadFavicon } from "./src/adapters/favicon";
+import { fetchAutocompleteSuggestions } from "./src/adapters/search";
 
 export function greetingFor(name?: string, date = new Date()) {
   const h = date.getHours();
@@ -19,29 +20,6 @@ export function mountGreeting(name?: string) {
   const update = () => (el.textContent = greetingFor(name));
   update();
   setInterval(update, 60_000);
-}
-
-/** Parses DuckDuckGo autocomplete response across list and object formats safely. */
-function parseDuckDuckGoSuggestions(data: unknown): string[] {
-  if (!Array.isArray(data)) return [];
-  // OpenSearch list format: [query, [sugg1, sugg2, ...]]
-  if (data.length >= 2 && Array.isArray(data[1])) {
-    return (data[1] as unknown[])
-      .filter((s): s is string => typeof s === "string")
-      .map((s) => s.trim())
-      .filter(Boolean);
-  }
-  // Object format: [{ phrase: "..." }, ...]
-  if (data.length > 0 && typeof data[0] === "object" && data[0] !== null && "phrase" in data[0]) {
-    return (data as Array<{ phrase?: unknown }>)
-      .map((item) => (typeof item.phrase === "string" ? item.phrase.trim() : ""))
-      .filter(Boolean);
-  }
-  // Plain string array: ["...", "..."]
-  if (data.length > 0 && typeof data[0] === "string") {
-    return (data as string[]).map((s) => s.trim()).filter(Boolean);
-  }
-  return [];
 }
 
 interface BookmarkedSite {
@@ -506,16 +484,8 @@ export function mountComposer() {
     const signal = abortController.signal;
 
     try {
-      const url = `https://duckduckgo.com/ac/?q=${encodeURIComponent(trimmed)}&type=list`;
-      const res = await fetch(url, { signal });
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
-
-      const data = await res.json();
+      const searchStrings = await fetchAutocompleteSuggestions(trimmed, { signal });
       if (signal.aborted || trimmed !== input.value.trim()) return;
-
-      const searchStrings = parseDuckDuckGoSuggestions(data);
       let finalWebsiteItems = [...currentWebsiteMatches];
 
       // E. Dynamic Universal Discovery from DuckDuckGo top suggestion:
