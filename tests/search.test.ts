@@ -133,6 +133,88 @@ test("cancels requests when the caller aborts", async () => {
   }
 });
 
+test("one caller can cancel while another caller shares the result", async () => {
+  const originalFetch = globalThis.fetch;
+  const controller = new AbortController();
+  let resolveFetch!: (response: Response) => void;
+  let sharedSignal: AbortSignal | undefined;
+  let calls = 0;
+
+  globalThis.fetch = (_input, init) => {
+    calls += 1;
+    sharedSignal = init?.signal;
+    return new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+  };
+
+  try {
+    const canceled = fetchAutocompleteSuggestions("shared-cancel-query", {
+      signal: controller.signal,
+    });
+    const other = fetchAutocompleteSuggestions("shared-cancel-query");
+
+    controller.abort();
+    await assert.rejects(canceled, (error: unknown) =>
+      error instanceof DOMException && error.name === "AbortError");
+    assert.equal(sharedSignal?.aborted, false);
+
+    resolveFetch(new Response(
+      JSON.stringify(["shared", ["shared result"]]),
+      { status: 200 },
+    ));
+    assert.deepEqual(await other, ["shared result"]);
+    assert.equal(calls, 1);
+
+    assert.deepEqual(
+      await fetchAutocompleteSuggestions("shared-cancel-query"),
+      ["shared result"],
+    );
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("one caller can time out while another caller shares the result", async () => {
+  const originalFetch = globalThis.fetch;
+  const firstController = new AbortController();
+  let resolveFetch!: (response: Response) => void;
+  let sharedSignal: AbortSignal | undefined;
+  let calls = 0;
+
+  globalThis.fetch = (_input, init) => {
+    calls += 1;
+    sharedSignal = init?.signal;
+    return new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+  };
+
+  try {
+    const timedOut = fetchAutocompleteSuggestions("shared-timeout-query", {
+      signal: firstController.signal,
+      timeoutMs: 10,
+    });
+    const other = fetchAutocompleteSuggestions("shared-timeout-query");
+
+    await assert.rejects(
+      timedOut,
+      (error: unknown) => error instanceof DOMException && error.name === "TimeoutError",
+    );
+    assert.equal(sharedSignal?.aborted, false);
+
+    resolveFetch(new Response(
+      JSON.stringify(["shared", ["shared timeout result"]]),
+      { status: 200 },
+    ));
+    assert.deepEqual(await other, ["shared timeout result"]);
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("handles HTTP errors without caching the failed response", async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;

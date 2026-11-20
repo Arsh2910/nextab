@@ -5,8 +5,13 @@ export const CACHE_TTL_MS = 30_000;
 const MAX_CACHE_ENTRIES = 50;
 
 type CacheEntry = { suggestions: string[]; expiresAt: number };
+type InFlightEntry = {
+  promise: Promise<string[]>;
+  controller: AbortController;
+  callerCount: number;
+};
 const cache = new Map<string, CacheEntry>();
-const inFlight = new Map<string, Promise<string[]>>();
+const inFlight = new Map<string, InFlightEntry>();
 
 export type AutocompleteOptions = {
   signal?: AbortSignal;
@@ -61,24 +66,16 @@ export async function fetchAutocompleteSuggestions(
   }
 
   const existing = inFlight.get(normalized);
-  if (existing) return existing;
+  if (existing) return subscribeToInFlight(normalized, existing, options);
 
   const controller = new AbortController();
-  let abortedByTimeout = false;
-
-  const abortFromExternal = () => {
-    controller.abort();
-  };
-  const abortFromTimeout = () => {
-    abortedByTimeout = true;
-    controller.abort();
+  const entry: InFlightEntry = {
+    promise: Promise.resolve([]),
+    controller,
+    callerCount: 0,
   };
 
-  if (options.signal) options.signal.addEventListener("abort", abortFromExternal, { once: true });
-  const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
-  const timer = setTimeout(abortFromTimeout, timeoutMs);
-
-  const request = (async () => {
+  entry.promise = (async () => {
     try {
       const response = await fetch(
         `${ENDPOINT}?q=${encodeURIComponent(query.trim())}&type=list`,
@@ -96,18 +93,67 @@ export async function fetchAutocompleteSuggestions(
       }
       remember(normalized, suggestions);
       return [...suggestions];
-    } catch (error) {
-      if (abortedByTimeout) {
-        throw new DOMException("Autocomplete request timed out", "TimeoutError");
-      }
-      throw error;
     } finally {
-      clearTimeout(timer);
-      options.signal?.removeEventListener("abort", abortFromExternal);
-      inFlight.delete(normalized);
+      if (inFlight.get(normalized) === entry) inFlight.delete(normalized);
     }
   })();
 
-  inFlight.set(normalized, request);
-  return request;
+  inFlight.set(normalized, entry);
+  return subscribeToInFlight(normalized, entry, options);
+}
+
+function subscribeToInFlight(
+  normalized: string,
+  entry: InFlightEntry,
+  options: AutocompleteOptions,
+): Promise<string[]> {
+  entry.callerCount += 1;
+
+  return new Promise<string[]>((resolve, reject) => {
+    let settled = false;
+    const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
+
+    const release = (cancelRequest: boolean) => {
+      if (options.signal) options.signal.removeEventListener("abort", abortFromCaller);
+      clearTimeout(timer);
+      entry.callerCount -= 1;
+      if (cancelRequest && entry.callerCount === 0) {
+        entry.controller.abort();
+        if (inFlight.get(normalized) === entry) inFlight.delete(normalized);
+      }
+    };
+
+    const abortFromCaller = () => {
+      if (settled) return;
+      settled = true;
+      release(true);
+      reject(new DOMException("Autocomplete request aborted", "AbortError"));
+    };
+
+    if (options.signal) {
+      options.signal.addEventListener("abort", abortFromCaller, { once: true });
+    }
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      release(true);
+      reject(new DOMException("Autocomplete request timed out", "TimeoutError"));
+    }, timeoutMs);
+
+    entry.promise.then(
+      (suggestions) => {
+        if (settled) return;
+        settled = true;
+        release(false);
+        resolve([...suggestions]);
+      },
+      (error) => {
+        if (settled) return;
+        settled = true;
+        release(false);
+        reject(error);
+      },
+    );
+  });
 }

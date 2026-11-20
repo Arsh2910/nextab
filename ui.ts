@@ -554,15 +554,17 @@ export function mountComposer() {
     lastTypedQuery = input.value;
     const val = input.value.trim();
 
-    if (!val) {
-      closeSuggestions();
-      return;
-    }
-
-    // Cancel the previous network request immediately as the query changes.
+    // Cancel stale work before handling the new value, including when the
+    // input has just been cleared.
+    clearTimeout(debounceTimer);
     if (abortController) {
       abortController.abort();
       abortController = null;
+    }
+
+    if (!val) {
+      closeSuggestions();
+      return;
     }
 
     // 1. INSTANT 0ms WEBSITE SUGGESTIONS: Display directly as you type!
@@ -576,7 +578,6 @@ export function mountComposer() {
     }
 
     // 2. ULTRA-SNAPPY 60ms DEBOUNCED SEARCH FETCH:
-    clearTimeout(debounceTimer);
     debounceTimer = window.setTimeout(() => {
       fetchSearchSuggestions(val);
     }, 60);
