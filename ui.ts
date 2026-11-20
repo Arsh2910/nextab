@@ -559,6 +559,12 @@ export function mountComposer() {
       return;
     }
 
+    // Cancel the previous network request immediately as the query changes.
+    if (abortController) {
+      abortController.abort();
+      abortController = null;
+    }
+
     // 1. INSTANT 0ms WEBSITE SUGGESTIONS: Display directly as you type!
     const websiteItems = getWebsiteMatches(val);
     currentWebsiteMatches = websiteItems;

@@ -48,3 +48,171 @@ test("caches equivalent queries without a second network request", async () => {
     globalThis.window = originalWindow;
   }
 });
+
+test("empty queries do not make a network request", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response("[]", { status: 200 });
+  };
+  try {
+    assert.deepEqual(await fetchAutocompleteSuggestions("   "), []);
+    assert.equal(calls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("cancels timed-out requests", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (_input, init) =>
+    new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => {
+        reject(new DOMException("Aborted", "AbortError"));
+      }, { once: true });
+    });
+
+  try {
+    await assert.rejects(
+      fetchAutocompleteSuggestions("timeout-query", { timeoutMs: 10 }),
+      (error: unknown) => error instanceof DOMException && error.name === "TimeoutError",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("aborted responses are not cached", async () => {
+  const originalFetch = globalThis.fetch;
+  const controller = new AbortController();
+  let calls = 0;
+  globalThis.fetch = async (_input, init) => {
+    calls += 1;
+    if (init?.signal?.aborted) {
+      throw new DOMException("Aborted", "AbortError");
+    }
+    await new Promise<void>((resolve) => {
+      init?.signal?.addEventListener("abort", () => resolve(), { once: true });
+    });
+    throw new DOMException("Aborted", "AbortError");
+  };
+
+  const pending = fetchAutocompleteSuggestions("abort-no-cache", { signal: controller.signal });
+  controller.abort();
+  await assert.rejects(pending, (error: unknown) =>
+    error instanceof DOMException && error.name === "AbortError");
+
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response(JSON.stringify(["abort", ["fresh result"]]), { status: 200 });
+  };
+  assert.deepEqual(await fetchAutocompleteSuggestions("abort-no-cache"), ["fresh result"]);
+  assert.equal(calls, 2);
+
+  globalThis.fetch = originalFetch;
+});
+
+test("cancels requests when the caller aborts", async () => {
+  const originalFetch = globalThis.fetch;
+  const controller = new AbortController();
+  globalThis.fetch = (_input, init) =>
+    new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => {
+        reject(new DOMException("Aborted", "AbortError"));
+      }, { once: true });
+    });
+
+  const pending = fetchAutocompleteSuggestions("cancel-query", { signal: controller.signal });
+  controller.abort();
+  try {
+    await assert.rejects(pending, (error: unknown) =>
+      error instanceof DOMException && error.name === "AbortError");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("handles HTTP errors without caching the failed response", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls === 1) return new Response("error", { status: 503 });
+    return new Response(JSON.stringify(["retry", ["retry result"]]), { status: 200 });
+  };
+
+  try {
+    await assert.rejects(
+      fetchAutocompleteSuggestions("http-retry"),
+      /HTTP 503/,
+    );
+    assert.deepEqual(await fetchAutocompleteSuggestions("http-retry"), ["retry result"]);
+    assert.equal(calls, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("handles network failures without caching", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls === 1) throw new TypeError("Network unavailable");
+    return new Response(JSON.stringify(["network", ["network result"]]), { status: 200 });
+  };
+
+  try {
+    await assert.rejects(
+      fetchAutocompleteSuggestions("network-retry"),
+      /Network unavailable/,
+    );
+    assert.deepEqual(await fetchAutocompleteSuggestions("network-retry"), ["network result"]);
+    assert.equal(calls, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("expires cached entries and refreshes them", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalNow = Date.now;
+  let now = 1_000;
+  let calls = 0;
+  Date.now = () => now;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response(JSON.stringify(["expire", [`result ${calls}`]]), { status: 200 });
+  };
+
+  try {
+    assert.deepEqual(await fetchAutocompleteSuggestions("expire-query"), ["result 1"]);
+    now += 30_001;
+    assert.deepEqual(await fetchAutocompleteSuggestions("expire-query"), ["result 2"]);
+    assert.equal(calls, 2);
+  } finally {
+    Date.now = originalNow;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("keeps multiple query results separate", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    const query = url.searchParams.get("q") ?? "";
+    calls.push(query);
+    return new Response(JSON.stringify([query, [`${query} result`]]), { status: 200 });
+  };
+
+  try {
+    assert.deepEqual(await fetchAutocompleteSuggestions("alpha"), ["alpha result"]);
+    assert.deepEqual(await fetchAutocompleteSuggestions("beta"), ["beta result"]);
+    assert.deepEqual(await fetchAutocompleteSuggestions("alpha"), ["alpha result"]);
+    assert.deepEqual(calls, ["alpha", "beta"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
