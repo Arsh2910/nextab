@@ -228,13 +228,20 @@ svg { display: block; }
   border-radius: 7px;
   background: color-mix(in srgb, var(--bg) 72%, transparent);
   opacity: 0;
+  pointer-events: none;
   transform: translateY(-50%) scale(.88);
 }
 
 .bookmark-item:hover .bookmark-remove,
 .bookmark-remove:focus-visible {
   opacity: 1;
+  pointer-events: auto;
   transform: translateY(-50%) scale(1);
+}
+
+@media (hover: none) {
+  .bookmark-remove { opacity: 1; pointer-events: auto; transform: translateY(-50%); }
+  .bookmark-link { padding-right: 27px; }
 }
 
 .bookmark-remove:hover { color: #ff7b87; border-color: rgba(255, 105, 120, .32); }
