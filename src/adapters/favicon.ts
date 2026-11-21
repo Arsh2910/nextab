@@ -30,7 +30,7 @@ function persistFaviconCache() {
     const obj: Record<string, string> = {};
     let count = 0;
     for (const [domain, url] of faviconCache.entries()) {
-      if (count++ > 300) break;
+      if (count++ >= 300) break;
       obj[domain] = url;
     }
     localStorage.setItem(STORAGE_CACHE_KEY, JSON.stringify(obj));
